@@ -17,7 +17,7 @@
   <section id="menu" class="screen">
     <div class="menu-card">
       <h1 class="logo">Tag United <span>Online</span></h1>
-      <p class="tagline">2 courts · 1 playground · 1 wall to hide behind · vote every round</p>
+      <p class="tagline">5 maps · 5 game modes · vote every round · bots optional</p>
 
       <label class="field">
         <span>Your name</span>
@@ -72,6 +72,7 @@
         <h3>Settings <span id="hostOnly" class="muted small"></span></h3>
         <label class="toggle"><input type="checkbox" id="botsToggle"> <span>Allow bots</span></label>
         <label class="field inline"><span>Bots</span><input type="range" id="botCount" min="1" max="7" value="3"><b id="botCountLabel">3</b></label>
+        <label class="field inline"><span>Map</span><select id="mapSelect"></select></label>
         <label class="field inline"><span>Round</span>
           <select id="roundTime">
             <option value="60">60 s</option><option value="90">90 s</option>
@@ -87,9 +88,15 @@
   <!-- Vote overlay -->
   <section id="vote" class="overlay hidden">
     <div class="panel wide">
-      <h2>Vote for the next game mode</h2>
+      <h2>Vote for the next round</h2>
       <p class="muted"><span id="voteTimer"></span></p>
+      <h3>Game mode</h3>
       <div id="voteCards" class="cards"></div>
+      <div id="mapVote">
+        <h3>Map</h3>
+        <div id="mapCards" class="cards maps"></div>
+      </div>
+      <p id="lockedMap" class="muted small"></p>
     </div>
   </section>
 

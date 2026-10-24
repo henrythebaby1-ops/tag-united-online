@@ -110,8 +110,8 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 #scoreboard .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 #scoreboard .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #scoreboard .me .nm { color: var(--accent); }
-#roomTag { position: absolute; top: 14px; left: 12px; font-weight: 800; color: var(--muted); font-size: 0.85rem; }
-#leaveBtn { position: absolute; top: 38px; left: 10px; }
+#roomTag { position: absolute; top: 10px; left: 10px; font-weight: 800; color: var(--text); font-size: 0.8rem; background: var(--panel); padding: 3px 8px; border-radius: 8px; }
+#leaveBtn { position: absolute; top: 40px; left: 10px; }
 #minimap { position: absolute; left: 10px; bottom: 10px; border-radius: 10px; border: 1px solid var(--line); opacity: 0.9; }
 #stamina { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); width: 180px; height: 10px; border-radius: 6px; background: rgba(0,0,0,0.5); overflow: hidden; }
 #staminaFill { height: 100%; width: 100%; background: linear-gradient(90deg, #3ddc84, #ffd23f); }
@@ -122,7 +122,7 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 /* overlays */
 .overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(5, 8, 14, 0.55); padding: 16px; overflow-y: auto; }
 .panel { width: min(440px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 22px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
-.panel.wide { width: min(860px, 100%); }
+.panel.wide { width: min(1000px, 100%); }
 .panel h2 { font-family: 'Lilita One', sans-serif; font-weight: 400; font-size: 1.8rem; margin: 0 0 6px; }
 .panel h3 { margin: 16px 0 8px; font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
 .code { color: var(--accent); letter-spacing: 0.15em; }
@@ -132,15 +132,23 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 #settings { text-align: left; margin-bottom: 14px; }
 .toggle { display: flex; align-items: center; gap: 10px; font-weight: 800; margin-bottom: 10px; cursor: pointer; }
 .toggle input { width: 20px; height: 20px; accent-color: var(--accent); }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 10px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 8px; margin-top: 6px; }
+.cards .card p { font-size: 0.74rem; line-height: 1.25; }
+.cards.maps .card { padding: 8px 10px; display: flex; align-items: center; gap: 8px; }
+.cards.maps .card .ic { font-size: 1.5rem; }
+.cards.maps .card h4 { font-size: 0.98rem; margin: 0; }
+.cards.maps .card p { display: none; }
+.cards.maps .card .votes { position: static; margin-left: auto; font-size: 0.8rem; }
+.cards.maps .card .voters { display: none; }
+#mapSelect { flex: 1; }
 .card {
-  position: relative; text-align: left; background: #222a3b; border: 2px solid var(--line); border-radius: 16px; padding: 16px;
+  position: relative; text-align: left; background: #222a3b; border: 2px solid var(--line); border-radius: 16px; padding: 14px;
   cursor: pointer; color: var(--text); font: inherit; transition: transform .1s, border-color .15s;
 }
 .card:hover { transform: translateY(-3px); border-color: rgba(255,210,63,0.5); }
 .card.sel { border-color: var(--accent); background: #2f3a1f; }
-.card .ic { font-size: 2.2rem; }
-.card h4 { font-family: 'Lilita One', sans-serif; font-weight: 400; font-size: 1.3rem; margin: 6px 0 4px; }
+.card .ic { font-size: 2rem; }
+.card h4 { font-family: 'Lilita One', sans-serif; font-weight: 400; font-size: 1.15rem; margin: 4px 0 4px; }
 .card p { margin: 0; color: var(--muted); font-size: 0.85rem; }
 .card .votes { position: absolute; top: 12px; right: 14px; font-weight: 800; color: var(--accent); }
 .card .voters { display: flex; gap: 4px; margin-top: 10px; min-height: 12px; flex-wrap: wrap; }
@@ -168,7 +176,7 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
   #topbar { top: 6px; padding: 4px 10px; }
   #modeLabel, #timer { font-size: 1rem; }
   #roleBanner { top: 48px; font-size: 1.1rem; }
-  #minimap { width: 120px; height: 80px; bottom: auto; top: 76px; }
+  #minimap { width: 120px; height: auto; bottom: auto; top: 76px; }
   #stamina { bottom: 130px; }
   #countdown { font-size: 6rem; }
 }

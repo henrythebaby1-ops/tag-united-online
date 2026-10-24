@@ -1,6 +1,6 @@
 // Bot AI. Bots are simulated by the room host only; everyone else sees them through state updates.
 import { SPEED, SPRINT_MULT, PLAYER_R, COLORS } from './config.js';
-import { WORLD, resolveCollisions, pointBlocked, hasLineOfSight, randomFreePoint, inSlowZone } from './map.js';
+import { WORLD, resolveCollisions, pointBlocked, hasLineOfSight, randomFreePoint, groundAt } from './map.js';
 
 export const VIS = 330; // vision radius in Blackout mode
 const BOT_NAMES = ['Blaze', 'Dash', 'Ziggy', 'Turbo', 'Pixel', 'Rocket', 'Nova', 'Bolt', 'Sprout', 'Jinx', 'Comet', 'Mochi'];
@@ -67,9 +67,13 @@ export function updateBot(b, ctx, dt) {
   if (sprint) b.stam = Math.max(0, b.stam - 32 * dt);
   else b.stam = Math.min(100, b.stam + 16 * dt);
 
-  let sp = SPEED * 0.88 * (r.it ? 1.06 : 1) * (sprint ? SPRINT_MULT : 1) * (inSlowZone(b.x, b.y) ? 0.55 : 1);
+  const ground = groundAt(b.x, b.y);
+  let sp = SPEED * 0.88 * (r.it ? 1.06 : 1) * (sprint ? SPRINT_MULT : 1) * ground.speed;
   if (ctx.phase !== 'play') sp *= 0.45;
-  b.vx = mx * sp; b.vy = my * sp;
+  if (ground.slide) {
+    const k = Math.min(1, dt * 1.8);
+    b.vx += (mx * sp - b.vx) * k; b.vy += (my * sp - b.vy) * k;
+  } else { b.vx = mx * sp; b.vy = my * sp; }
   b.x += b.vx * dt; b.y += b.vy * dt;
   resolveCollisions(b, PLAYER_R);
   if (moving) b.d = Math.atan2(my, mx);

@@ -1,6 +1,6 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm';
 import { SUPABASE_URL, SUPABASE_KEY, CHANNEL_PREFIX, LOBBY_CHANNEL, PLAYER_R, SPEED, SPRINT_MULT, TAG_DIST, MODES, COLORS } from './config.js';
-import { WORLD, renderMap, resolveCollisions, randomFreePoint, inSlowZone } from './map.js';
+import { WORLD, MAP, MAPS, MAP_IDS, setMap, renderMap, resolveCollisions, randomFreePoint, pointBlocked, groundAt } from './map.js';
 import { VIS, canSee, newBotInfo, newBotSim, updateBot } from './bots.js';
 
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY, { realtime: { params: { eventsPerSecond: 40 } } });
@@ -38,18 +38,33 @@ const ents = new Map();      // remote humans + (for non-hosts) bots
 const botSim = new Map();    // host only: id -> bot simulation
 const hostMem = { botVoteAt: {}, elim: 0 };
 const me = { id: myId, x: 600, y: 800, vx: 0, vy: 0, d: 0, stam: 100, exhausted: false };
-let prevPhase = null, myVote = null;
+let prevPhase = null, myVote = null, myMapVote = null;
 let lastStateSent = 0, lastPosSent = 0, lastPX = 0, lastPY = 0;
 let lobbyTrackKey = '';
 
 // ---------- canvas ----------
 const cv = $('game'), ctx = cv.getContext('2d');
-const mapImg = renderMap();
+let mapImg = renderMap(MAP.id);
 const dark = document.createElement('canvas'), dctx = dark.getContext('2d');
 const mini = $('minimap'), mctx = mini.getContext('2d');
 const miniBase = document.createElement('canvas');
-miniBase.width = mini.width; miniBase.height = mini.height;
-miniBase.getContext('2d').drawImage(mapImg, 0, 0, mini.width, mini.height);
+function buildMinimap() {
+  mini.height = miniBase.height = Math.round(mini.width * WORLD.h / WORLD.w);
+  miniBase.width = mini.width;
+  miniBase.getContext('2d').drawImage(mapImg, 0, 0, miniBase.width, miniBase.height);
+}
+buildMinimap();
+
+// Switch every client to the same map; anyone left inside a wall gets moved somewhere free
+function applyMap(id) {
+  if (!MAPS[id] || MAP.id === id) return;
+  setMap(id);
+  mapImg = renderMap(id);
+  buildMinimap();
+  if (pointBlocked(me.x, me.y, PLAYER_R)) Object.assign(me, randomFreePoint());
+  for (const b of botSim.values()) if (pointBlocked(b.x, b.y, PLAYER_R)) Object.assign(b, randomFreePoint(), { goal: null, flee: null });
+  if (room) $('roomTag').textContent = `Room ${room} · ${MAP.icon} ${MAP.name}`;
+}
 let vw = 0, vh = 0, dpr = 1, scale = 1, camX = 0, camY = 0;
 function resize() {
   dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -131,7 +146,7 @@ function joinRoom(rawCode) {
 
   $('menu').classList.add('hidden');
   $('hud').classList.remove('hidden');
-  $('roomTag').textContent = 'Room ' + code;
+  $('roomTag').textContent = `Room ${code} · ${MAP.icon} ${MAP.name}`;
   $('lobbyCode').textContent = code;
   if (isTouch) $('touch').classList.remove('hidden');
   setStatus('Connecting…');
@@ -172,7 +187,7 @@ function updateHostStatus() {
   const h = computeHost();
   if (h === myId && !isHost) {
     isHost = true;
-    if (!state) hostInit();
+    if (!state) { hostInit(); applyMap('schoolyard'); }
     else {
       state.host = myId;
       botSim.clear();
@@ -204,6 +219,7 @@ function onState(p) {
   }
   state = p;
   phaseEnd = now() + (p.t || 0);
+  if (p.map) applyMap(p.map);
   const ids = new Set();
   for (const b of p.bots || []) {
     ids.add(b.id);
@@ -214,7 +230,10 @@ function onState(p) {
 
 function onVote(p) {
   if (!isHost || !state || state.phase !== 'vote' || !p) return;
-  if (state.choices.includes(p.mode) && (presence[p.id])) { state.votes[p.id] = p.mode; sendState(); }
+  if (!presence[p.id]) return;
+  if (state.choices.includes(p.mode)) state.votes[p.id] = p.mode;
+  if (state.mapChoices.includes(p.map)) state.mapVotes[p.id] = p.map;
+  sendState();
 }
 
 function emit(e) { send('evt', e); handleEvt(e); }
@@ -233,7 +252,8 @@ function hostInit() {
   state = {
     host: myId, seq: 0, phase: 'waiting', mode: null, choices: [], votes: {}, roles: {}, bots: [],
     fuse: 0, results: null, round: 0, lastSurvivor: null,
-    settings: { bots: true, botCount: 3, roundTime: 120 },
+    map: 'schoolyard', mapChoices: [], mapVotes: {},
+    settings: { bots: true, botCount: 3, roundTime: 120, map: 'vote' },
   };
   phaseEnd = 0;
 }
@@ -276,26 +296,36 @@ function ensureRoles(ids) {
 }
 
 function startVote() {
-  // Classic Tag is always on the ballot, plus two other random modes
-  state.choices = ['classic', ...shuffle(Object.keys(MODES).filter(m => m !== 'classic')).slice(0, 2)];
+  // every game mode is on the ballot, and every map unless the host locked one
+  state.choices = Object.keys(MODES);
   state.votes = {};
+  state.mapChoices = state.settings.map === 'vote' ? [...MAP_IDS] : [];
+  state.mapVotes = {};
   state.results = null;
   hostMem.botVoteAt = {};
   setPhase('vote', 15000);
   sendState();
 }
 
-function finishVote() {
+// Real players decide; bot votes only count when no human voted
+function tally(votes, choices) {
+  const entries = Object.entries(votes);
+  const human = entries.filter(([id]) => !isBot(id));
   const counts = {};
-  for (const m of Object.values(state.votes)) counts[m] = (counts[m] || 0) + 1;
+  for (const [, m] of (human.length ? human : entries)) counts[m] = (counts[m] || 0) + 1;
   const max = Math.max(0, ...Object.values(counts));
-  const top = max ? state.choices.filter(m => counts[m] === max) : state.choices;
-  state.mode = pick(top);
+  return pick(max ? choices.filter(m => counts[m] === max) : choices);
+}
+
+function finishVote() {
+  state.mode = tally(state.votes, state.choices);
+  state.map = state.mapChoices.length ? tally(state.mapVotes, state.mapChoices) : (MAPS[state.settings.map] ? state.settings.map : state.map);
+  applyMap(state.map);
   state.round++;
   assignRoles();
   for (const s of botSim.values()) Object.assign(s, randomFreePoint(), { goal: null, flee: null });
   setPhase('countdown', 3500);
-  emit({ k: 'mode', text: `${MODES[state.mode].icon} ${MODES[state.mode].name} wins the vote!` });
+  emit({ k: 'mode', text: `${MODES[state.mode].icon} ${MODES[state.mode].name} on ${MAPS[state.map].icon} ${MAPS[state.map].name}!` });
   sendState();
 }
 
@@ -344,9 +374,13 @@ function hostTick(dt) {
     if (ids.length < 2) return toWaiting('Not enough players');
     for (const b of state.bots) {
       if (!hostMem.botVoteAt[b.id]) hostMem.botVoteAt[b.id] = t + rand(1500, 9000);
-      if (!state.votes[b.id] && t > hostMem.botVoteAt[b.id]) { state.votes[b.id] = pick(state.choices); sendState(); }
+      if (!state.votes[b.id] && t > hostMem.botVoteAt[b.id]) {
+        state.votes[b.id] = pick(state.choices);
+        if (state.mapChoices.length) state.mapVotes[b.id] = pick(state.mapChoices);
+        sendState();
+      }
     }
-    const allHumansVoted = humanIds().every(id => state.votes[id]);
+    const allHumansVoted = humanIds().every(id => state.votes[id] && (!state.mapChoices.length || state.mapVotes[id]));
     if (t >= phaseEnd) finishVote();
     else if (allHumansVoted && phaseEnd - t > 3000) {
       phaseEnd = t + 3000; sendState(); // everyone voted: wrap up quickly
@@ -565,8 +599,13 @@ function updateMe(dt) {
   if (sprint) me.stam = Math.max(0, me.stam - 30 * dt);
   else me.stam = Math.min(100, me.stam + 18 * dt);
 
-  const sp = SPEED * (r?.it ? 1.06 : 1) * (sprint ? SPRINT_MULT : 1) * (inSlowZone(me.x, me.y) ? 0.55 : 1);
-  me.vx = mx * sp; me.vy = my * sp;
+  const ground = groundAt(me.x, me.y);
+  const sp = SPEED * (r?.it ? 1.06 : 1) * (sprint ? SPRINT_MULT : 1) * ground.speed;
+  if (ground.slide) {
+    // ice: you keep sliding and turn slowly
+    const k = Math.min(1, dt * 1.8);
+    me.vx += (mx * sp - me.vx) * k; me.vy += (my * sp - me.vy) * k;
+  } else { me.vx = mx * sp; me.vy = my * sp; }
   me.x += me.vx * dt; me.y += me.vy * dt;
   resolveCollisions(me, PLAYER_R);
   if (moving) me.d = Math.atan2(my, mx);
@@ -594,7 +633,7 @@ function detectPhaseChange() {
   const ph = state?.phase || null;
   if (ph === prevPhase) return;
   if (ph === 'countdown') { Object.assign(me, randomFreePoint()); me.stam = 100; }
-  if (ph === 'vote') { myVote = null; beep(440, 0.1, 'triangle'); }
+  if (ph === 'vote') { myVote = myMapVote = null; beep(440, 0.1, 'triangle'); }
   if (ph === 'play') beep(880, 0.3, 'square', 0.07);
   prevPhase = ph;
 }
@@ -626,7 +665,11 @@ function render(t) {
   ctx.fillRect(0, 0, vw, vh);
   const viewW = vw / scale, viewH = vh / scale;
   let fx = me.x, fy = me.y;
-  if (!room) { fx = WORLD.w / 2 + Math.sin(t / 9000) * 700; fy = WORLD.h / 2 + Math.cos(t / 12000) * 400; }
+  if (!room) {
+    const want = MAP_IDS[Math.floor(t / 12000) % MAP_IDS.length];
+    if (MAP.id !== want) applyMap(want);
+    fx = WORLD.w / 2 + Math.sin(t / 9000) * 700; fy = WORLD.h / 2 + Math.cos(t / 12000) * 400;
+  }
   camX = viewW >= WORLD.w ? (WORLD.w - viewW) / 2 : Math.max(0, Math.min(WORLD.w - viewW, fx - viewW / 2));
   camY = viewH >= WORLD.h ? (WORLD.h - viewH) / 2 : Math.max(0, Math.min(WORLD.h - viewH, fy - viewH / 2));
 
@@ -759,7 +802,7 @@ function setStatus(s) { const el = $('status'); el.textContent = s; el.classList
 const show = (id, on) => $(id).classList.toggle('hidden', !on);
 const fmt = ms => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
-let voteSig = '', lobbySig = '', lastCount = null;
+let lobbySig = '', lastCount = null;
 function updateHud() {
   if (!room) return;
   $('staminaFill').style.width = me.stam + '%';
@@ -857,7 +900,8 @@ function renderLobby() {
     li.append(dot, document.createTextNode(nameOf(id) + (id === state.host ? ' 👑' : '') + (id === myId ? ' (you)' : '')));
     ul.appendChild(li);
   }
-  for (const id of ['botsToggle', 'botCount', 'roundTime']) $(id).disabled = !isHost;
+  for (const id of ['botsToggle', 'botCount', 'roundTime', 'mapSelect']) $(id).disabled = !isHost;
+  $('mapSelect').value = s.map || 'vote';
   $('botsToggle').checked = s.bots;
   $('botCount').value = s.botCount; $('botCountLabel').textContent = s.botCount;
   $('botCount').parentElement.style.opacity = s.bots ? 1 : 0.4;
@@ -871,30 +915,37 @@ function renderLobby() {
 
 function renderVote(left) {
   $('voteTimer').textContent = `Voting ends in ${Math.max(0, Math.ceil(left / 1000))}s`;
-  const box = $('voteCards');
-  // build the cards once per ballot, then update them in place so clicks are never lost
-  const sig = state.round + ':' + state.choices.join();
-  if (sig !== voteSig) {
-    voteSig = sig;
+  renderBallot($('voteCards'), 'mode', state.choices, MODES, state.votes, myVote);
+  const maps = state.mapChoices || [];
+  show('mapVote', maps.length > 0);
+  $('lockedMap').textContent = maps.length ? '' : `Map: ${MAPS[state.settings.map]?.icon || ''} ${MAPS[state.settings.map]?.name || MAP.name} (picked by host)`;
+  if (maps.length) renderBallot($('mapCards'), 'map', maps, MAPS, state.mapVotes || {}, myMapVote);
+}
+
+// Build the cards once per ballot, then update them in place so clicks are never lost
+function renderBallot(box, kind, choices, info, votes, mine) {
+  const sig = state.round + ':' + choices.join();
+  if (box.dataset.sig !== sig) {
+    box.dataset.sig = sig;
     box.replaceChildren();
-    for (const mode of state.choices) {
-      const M = MODES[mode];
+    for (const key of choices) {
+      const M = info[key];
       const b = document.createElement('button');
-      b.className = 'card'; b.dataset.mode = mode;
+      b.className = 'card'; b.dataset.key = key; b.title = M.desc;
       const ic = document.createElement('div'); ic.className = 'ic'; ic.textContent = M.icon;
       const h = document.createElement('h4'); h.textContent = M.name;
       const p = document.createElement('p'); p.textContent = M.desc;
       const v = document.createElement('div'); v.className = 'votes';
       const vs = document.createElement('div'); vs.className = 'voters';
       b.append(ic, h, p, v, vs);
-      b.onclick = () => castVote(mode);
+      b.onclick = () => castVote(kind, key);
       box.appendChild(b);
     }
   }
   for (const b of box.children) {
-    const mode = b.dataset.mode;
-    const voters = Object.entries(state.votes).filter(([, v]) => v === mode).map(([id]) => id);
-    b.classList.toggle('sel', (state.votes[myId] || myVote) === mode);
+    const key = b.dataset.key;
+    const voters = Object.entries(votes).filter(([, v]) => v === key).map(([id]) => id);
+    b.classList.toggle('sel', (votes[myId] || mine) === key);
     b.querySelector('.votes').textContent = voters.length ? `${voters.length} vote${voters.length > 1 ? 's' : ''}` : '';
     const vs = b.querySelector('.voters');
     if (vs.dataset.sig !== voters.join()) {
@@ -904,11 +955,11 @@ function renderVote(left) {
   }
 }
 
-function castVote(mode) {
-  myVote = mode;
+function castVote(kind, key) {
   beep(660, 0.06, 'triangle');
-  if (isHost) { state.votes[myId] = mode; sendState(); }
-  else send('vote', { id: myId, mode });
+  if (kind === 'map') myMapVote = key; else myVote = key;
+  if (isHost) { (kind === 'map' ? state.mapVotes : state.votes)[myId] = key; sendState(); }
+  else send('vote', { id: myId, [kind]: key });
 }
 
 function renderResults(left) {
@@ -936,6 +987,17 @@ function renderResults(left) {
 $('botsToggle').onchange = e => { if (!isHost) return; state.settings.bots = e.target.checked; lobbySig = ''; sendState(); };
 $('botCount').oninput = e => { if (!isHost) return; state.settings.botCount = +e.target.value; $('botCountLabel').textContent = e.target.value; sendState(); };
 $('roundTime').onchange = e => { if (!isHost) return; state.settings.roundTime = +e.target.value; sendState(); };
+$('mapSelect').onchange = e => {
+  if (!isHost) return;
+  state.settings.map = e.target.value;
+  if (MAPS[e.target.value]) { state.map = e.target.value; applyMap(state.map); }
+  lobbySig = ''; sendState();
+};
+for (const id of ['vote', ...MAP_IDS]) {
+  const o = document.createElement('option');
+  o.value = id; o.textContent = id === 'vote' ? '🗳️ Vote every round' : `${MAPS[id].icon} ${MAPS[id].name}`;
+  $('mapSelect').appendChild(o);
+}
 $('startBtn').onclick = () => { if (isHost && participants().length >= 2) startVote(); };
 $('toLobbyBtn').onclick = () => { if (isHost) toWaiting(); };
 $('leaveBtn').onclick = () => leaveRoom();
@@ -978,7 +1040,7 @@ function renderRoomList() {
     const li = document.createElement('li');
     const info = document.createElement('span');
     const status = r.phase === 'waiting' ? 'in lobby' : r.mode && MODES[r.mode] ? `playing ${MODES[r.mode].name}` : 'voting';
-    info.textContent = `${r.room} · ${String(r.host || '').slice(0, 14)} · ${r.players} 👤 · ${status}`;
+    info.textContent = `${r.room} · ${r.map && MAPS[r.map] ? MAPS[r.map].icon + ' ' : ''}${String(r.host || '').slice(0, 14)} · ${r.players} 👤 · ${status}`;
     const b = document.createElement('button'); b.className = 'btn small'; b.textContent = 'Join';
     b.onclick = () => joinRoom(r.room);
     li.append(info, b);
@@ -989,7 +1051,7 @@ function renderRoomList() {
 function updateLobbyTrack() {
   if (!lobbyCh) return;
   if (room && isHost && state) {
-    const meta = { room, host: profile.name, players: humanIds().length, phase: state.phase, mode: state.mode };
+    const meta = { room, host: profile.name, players: humanIds().length, phase: state.phase, mode: state.mode, map: state.map };
     const key = JSON.stringify(meta);
     if (key !== lobbyTrackKey) { lobbyTrackKey = key; lobbyCh.track(meta).catch(() => {}); }
   } else if (lobbyTrackKey) {

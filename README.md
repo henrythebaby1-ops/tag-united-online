@@ -1,11 +1,11 @@
 # Tag United Online
 
-A browser multiplayer tag game. The map has two basketball courts, a playground and a big brick wall to hide behind. Every round starts with a vote on the game mode.
+A browser multiplayer tag game with 5 maps and 5 game modes. Every round starts with a vote on the mode and the map.
 
 **Play:** https://henrythebaby1-ops.github.io/tag-united-online/
 
 ## Game modes
-Classic Tag is on every ballot. The two other choices are picked at random from the rest.
+Every mode is on every ballot. Real players' votes decide; bot votes only count when no human voted.
 
 | Mode | Rules |
 |---|---|
@@ -15,7 +15,16 @@ Classic Tag is on every ballot. The two other choices are picked at random from 
 | 🥔 Hot Potato | Pass the potato before the fuse runs out, or you're out. |
 | 🔦 Blackout | Classic Tag in the dark, with a small vision radius. |
 
-Walls, trees and the slide tower block line of sight, so other players can't see you behind them.
+## Maps
+| Map | What's there |
+|---|---|
+| 🏫 Schoolyard | Two basketball courts, a playground, a sandbox and the big brick wall |
+| 🏙️ Downtown | City blocks with alleys, parked cars, a taco truck and a street court |
+| 🏖️ Sunny Beach | Boardwalk shops, palms, soft sand, a pier and shallow water that slows you down |
+| 🌿 Hedge Maze | A garden maze with statues and a fountain plaza in the middle |
+| ❄️ Frosty Park | A slippery ice rink and frozen pond, deep snow, igloos and snow forts |
+
+The host can let players vote on the map each round or lock one map. Walls, buildings, hedges, trees and other tall objects block line of sight, so other players can't see you behind them.
 
 ## Controls
 - **WASD / arrow keys:** move
