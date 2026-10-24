@@ -1,6 +1,6 @@
 # Tag United Online
 
-A browser multiplayer tag game with 5 maps and 5 game modes. Every round starts with a vote on the mode and the map.
+A browser multiplayer tag game with 5 maps and 10 game modes. Every round starts with a vote on the mode and the map.
 
 **Play:** https://henrythebaby1-ops.github.io/tag-united-online/
 
@@ -14,6 +14,11 @@ Every mode is on every ballot. Real players' votes decide; bot votes only count 
 | 🧟 Infection | Tagged players join the infected. Last survivor wins. |
 | 🥔 Hot Potato | Pass the potato before the fuse runs out, or you're out. |
 | 🔦 Blackout | Classic Tag in the dark, with a small vision radius. |
+| 👑 Crown Chase | Reverse tag: touch the crown holder to steal the crown. Most time wearing it wins. |
+| 🙈 Hide & Seek | The seeker is blindfolded for 20 s while everyone hides. Found players are out. |
+| ⚡ Turbo Tag | Classic Tag at 1.35× speed with unlimited sprint. |
+| 🔴 Shrinking Zone | Classic Tag inside a closing circle. Outside it you're slowed and gain penalty time. |
+| 👻 Ghost Tag | IT is invisible until they're within a few steps of you. |
 
 ## Maps
 | Map | What's there |

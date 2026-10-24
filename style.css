@@ -138,7 +138,13 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 .cards.maps .card .ic { font-size: 1.5rem; }
 .cards.maps .card h4 { font-size: 0.98rem; margin: 0; }
 .cards.maps .card p { display: none; }
-.cards.maps .card .votes { position: static; margin-left: auto; font-size: 0.8rem; }
+.cards.maps .card .votes { position: static; margin-left: auto; font-size: 0.8rem; white-space: nowrap; }
+@media (max-height: 760px) {
+  .cards .card p { display: none; }
+  .cards .card { padding: 10px 12px; }
+  .cards .card .ic { font-size: 1.5rem; }
+  .panel h2 { font-size: 1.5rem; }
+}
 .cards.maps .card .voters { display: none; }
 #mapSelect { flex: 1; }
 .card {

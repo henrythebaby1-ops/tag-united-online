@@ -1,5 +1,6 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, CHANNEL_PREFIX, LOBBY_CHANNEL, PLAYER_R, SPEED, SPRINT_MULT, TAG_DIST, MODES, COLORS } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY, CHANNEL_PREFIX, LOBBY_CHANNEL, PLAYER_R, SPEED, SPRINT_MULT, TAG_DIST, MODES, COLORS,
+  CLASSIC_RULES, HIDE_MS, GHOST_R, modeSpeed, zoneFor, outsideZone } from './config.js';
 import { WORLD, MAP, MAPS, MAP_IDS, setMap, renderMap, resolveCollisions, randomFreePoint, pointBlocked, groundAt } from './map.js';
 import { VIS, canSee, newBotInfo, newBotSim, updateBot } from './bots.js';
 
@@ -291,7 +292,7 @@ function defaultRole(out = false) { return { it: false, frozen: false, out, stun
 
 function ensureRoles(ids) {
   const inRound = state.phase === 'play' || state.phase === 'countdown';
-  for (const id of ids) if (!state.roles[id]) state.roles[id] = defaultRole(inRound && state.mode === 'potato');
+  for (const id of ids) if (!state.roles[id]) state.roles[id] = defaultRole(inRound && (state.mode === 'potato' || state.mode === 'hide'));
   for (const id of Object.keys(state.roles)) if (!ids.includes(id)) delete state.roles[id];
 }
 
@@ -335,7 +336,7 @@ function assignRoles() {
   for (const id of ids) state.roles[id] = defaultRole();
   const n = ids.length;
   const m = state.mode;
-  const taggerCount = m === 'freeze' ? Math.max(1, Math.ceil(n / 4)) : m === 'potato' ? 1 : (n >= 8 ? 2 : 1);
+  const taggerCount = m === 'freeze' ? Math.max(1, Math.ceil(n / 4)) : m === 'potato' || m === 'crown' ? 1 : (n >= 8 ? 2 : 1);
   for (const id of shuffle(ids).slice(0, taggerCount)) state.roles[id].it = true;
   state.fuse = m === 'potato' ? rand(14000, 20000) : 0;
   state.lastSurvivor = null;
@@ -343,11 +344,21 @@ function assignRoles() {
 }
 
 function startPlay() {
-  const ms = state.mode === 'potato' ? 300000 : state.settings.roundTime * 1000;
+  const m = state.mode;
+  const ms = m === 'potato' ? 300000 : state.settings.roundTime * 1000 + (m === 'hide' ? HIDE_MS : 0);
   setPhase('play', ms);
-  // head start for runners
-  for (const r of Object.values(state.roles)) if (r.it && state.mode !== 'potato') r.stun = 1500;
+  for (const r of Object.values(state.roles)) {
+    if (!r.it) continue;
+    if (m === 'hide') r.stun = HIDE_MS;                       // seeker counts while everyone hides
+    else if (m !== 'potato' && m !== 'crown') r.stun = 1500;  // head start for runners
+  }
   sendState();
+}
+
+const ROLE_WORD = { potato: 'holding the potato 🥔', infection: 'infected 🧟', crown: 'wearing the crown 👑', hide: 'the seeker 🔎', ghost: 'the ghost 👻' };
+
+function currentZone() {
+  return state ? zoneFor(state.mode, state.phase, WORLD.w, WORLD.h, phaseEnd - now(), state.settings.roundTime * 1000) : null;
 }
 
 function toWaiting(reason) {
@@ -400,7 +411,7 @@ function hostTick(dt) {
     const p = posOf(id);
     return p ? { id, x: p.x, y: p.y, vx: p.vx || 0, vy: p.vy || 0 } : null;
   }).filter(Boolean);
-  const bctx = { phase: state.phase, mode: state.mode, roles: state.roles, others };
+  const bctx = { phase: state.phase, mode: state.mode, roles: state.roles, others, round: state.round, zone: currentZone() };
   for (const b of botSim.values()) updateBot(b, bctx, dt);
 
   if (t - lastStateSent > 200) sendState();
@@ -423,12 +434,16 @@ function hostPlayTick(dt, ids) {
       const p = pick(pool);
       R[p].it = true; R[p].stun = 1000;
       if (m === 'potato') state.fuse = rand(10000, 16000);
-      emit({ k: 'tag', b: p, text: `${nameOf(p)} is now ${m === 'potato' ? 'holding the potato 🥔' : m === 'infection' ? 'infected 🧟' : 'IT!'}` });
+      emit({ k: 'tag', b: p, text: `${nameOf(p)} is now ${ROLE_WORD[m] || 'IT!'}` });
     }
   }
 
-  if (m === 'classic' || m === 'blackout') {
+  if (CLASSIC_RULES.has(m)) {
     for (const id of alive) if (R[id].it) R[id].score += dt;
+    if (m === 'zone') {
+      const z = currentZone();
+      for (const id of alive) { const p = posOf(id); if (p && outsideZone(z, p)) R[id].score += dt; }
+    }
     outer: for (const a of alive) {
       if (!R[a].it || R[a].stun > 0) continue;
       for (const b of alive) {
@@ -479,6 +494,34 @@ function hostPlayTick(dt, ids) {
       return endRound(w ? `${nameOf(w)} wins! 🏆` : 'Infected win! 🧟', w ? 'Last survivor standing.' : 'Everyone got infected.',
         rows(alive, id => `${R[id].score.toFixed(1)}s survived`, id => R[id].score + (id === w ? 1000 : 0)));
     }
+  } else if (m === 'crown') {
+    const h = alive.find(id => R[id].it);
+    if (h) {
+      R[h].score += dt;
+      if (R[h].imm <= 0) {
+        for (const b of alive) {
+          if (b === h || R[b].stun > 0 || !touching(h, b)) continue;
+          R[h].it = false; R[h].stun = 700;
+          R[b].it = true; R[b].imm = 2000; R[b].tags++;
+          emit({ k: 'tag', a: b, b: h, text: `👑 ${nameOf(b)} stole the crown from ${nameOf(h)}!` });
+          break;
+        }
+      }
+    }
+  } else if (m === 'hide') {
+    for (const id of alive) if (!R[id].it) R[id].score += dt;
+    for (const a of alive) {
+      if (!R[a].it || R[a].stun > 0) continue;
+      for (const b of alive) {
+        if (R[b].it || R[b].out || !touching(a, b)) continue;
+        R[b].out = true; R[a].tags++;
+        emit({ k: 'tag', a, b, text: `🔎 ${nameOf(a)} found ${nameOf(b)}!` });
+      }
+    }
+    if (!alive.some(id => !R[id].it && !R[id].out)) {
+      return endRound('Seekers win! 🔎', 'Everyone was found.',
+        rows(ids, id => R[id].it ? `found ${R[id].tags}` : `hid for ${R[id].score.toFixed(0)}s`, id => R[id].it ? 1000 + R[id].tags : R[id].score));
+    }
   } else if (m === 'potato') {
     const h = alive.find(id => R[id].it);
     if (h && R[h].stun <= 0) {
@@ -512,9 +555,18 @@ function hostPlayTick(dt, ids) {
   }
 
   if (now() >= phaseEnd) {
-    if (m === 'classic' || m === 'blackout') {
-      const r = rows(alive, id => `${R[id].score.toFixed(1)}s as IT`, id => -R[id].score);
-      return endRound(`${r[0] ? r[0].name : 'Nobody'} wins! 🏆`, 'Least time spent as IT.', r);
+    if (CLASSIC_RULES.has(m)) {
+      const r = rows(alive, id => `${R[id].score.toFixed(1)}s ${m === 'zone' ? 'penalty' : 'as IT'}`, id => -R[id].score);
+      return endRound(`${r[0] ? r[0].name : 'Nobody'} wins! 🏆`, m === 'zone' ? 'Least time as IT or outside the zone.' : 'Least time spent as IT.', r);
+    }
+    if (m === 'crown') {
+      const r = rows(alive, id => `${R[id].score.toFixed(1)}s with the crown`, id => R[id].score);
+      return endRound(`${r[0] ? r[0].name : 'Nobody'} wins! 👑`, 'Most time wearing the crown.', r);
+    }
+    if (m === 'hide') {
+      const hid = ids.filter(id => !R[id].it && !R[id].out);
+      return endRound('Hiders win! 🙈', `${hid.length} hider${hid.length === 1 ? '' : 's'} never got found.`,
+        rows(ids, id => R[id].it ? `found ${R[id].tags}` : R[id].out ? `hid for ${R[id].score.toFixed(0)}s` : 'never found!', id => R[id].it ? R[id].tags : R[id].out ? R[id].score : 1000));
     }
     if (m === 'freeze') {
       const runners = alive.filter(id => !R[id].it);
@@ -596,11 +648,13 @@ function updateMe(dt) {
   if (me.stam <= 0) me.exhausted = true;
   if (me.exhausted && me.stam > 25) me.exhausted = false;
   const sprint = wantSprint && moving && !me.exhausted;
-  if (sprint) me.stam = Math.max(0, me.stam - 30 * dt);
+  if (sprint && state?.mode !== 'turbo') me.stam = Math.max(0, me.stam - 30 * dt);
   else me.stam = Math.min(100, me.stam + 18 * dt);
 
   const ground = groundAt(me.x, me.y);
-  const sp = SPEED * (r?.it ? 1.06 : 1) * (sprint ? SPRINT_MULT : 1) * ground.speed;
+  const inRound = state?.phase === 'play';
+  const zoneSlow = inRound && outsideZone(currentZone(), me) ? 0.6 : 1;
+  const sp = SPEED * (r?.it ? 1.06 : 1) * (sprint ? SPRINT_MULT : 1) * ground.speed * (inRound ? modeSpeed(state.mode, r) : 1) * zoneSlow;
   if (ground.slide) {
     // ice: you keep sliding and turn slowly
     const k = Math.min(1, dt * 1.8);
@@ -655,7 +709,10 @@ function visibleToMe(e) {
   if (e.id === myId) return true;
   const ph = state?.phase;
   if (ph !== 'play' && ph !== 'countdown') return true;
-  if (myRole()?.out) return true;
+  const mine = myRole();
+  if (mine?.out) return true;
+  if (state.mode === 'hide' && mine?.it && mine.stun > 0) return false;
+  if (state.mode === 'ghost' && state.roles[e.id]?.it && !mine?.it && dist(me, e) > GHOST_R) return false;
   return canSee(me, e, state.mode, ph);
 }
 
@@ -677,11 +734,29 @@ function render(t) {
   ctx.scale(scale, scale);
   ctx.translate(-camX, -camY);
   ctx.drawImage(mapImg, 0, 0);
+  const zone = room && currentZone();
+  if (zone) {
+    ctx.fillStyle = 'rgba(255,40,40,0.22)';
+    ctx.beginPath(); ctx.rect(0, 0, WORLD.w, WORLD.h); ctx.arc(zone.x, zone.y, zone.r, 0, Math.PI * 2, true); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,60,60,0.9)'; ctx.lineWidth = 8; ctx.setLineDash([30, 18]);
+    ctx.beginPath(); ctx.arc(zone.x, zone.y, zone.r, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+  }
   if (room) {
     const list = renderables().filter(visibleToMe).sort((a, b) => a.y - b.y);
     for (const e of list) drawPlayer(e, state?.roles?.[e.id], t);
   }
   ctx.restore();
+
+  const mine = myRole();
+  if (room && state?.mode === 'hide' && state.phase === 'play' && mine?.it && mine.stun > 0) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = 'rgba(5,5,12,0.97)'; ctx.fillRect(0, 0, vw, vh);
+    ctx.fillStyle = '#ffd23f'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '72px "Lilita One", sans-serif';
+    ctx.fillText(Math.ceil(mine.stun / 1000), vw / 2, vh / 2);
+    ctx.font = '22px Nunito, sans-serif'; ctx.fillStyle = '#fff';
+    ctx.fillText('🙈 Counting… no peeking!', vw / 2, vh / 2 + 60);
+  }
 
   if (room && state?.mode === 'blackout' && state.phase === 'play' && !myRole()?.out) {
     dctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -707,6 +782,7 @@ function drawPlayer(e, r, t) {
   ctx.save();
   ctx.translate(e.x, e.y);
   if (r?.out) ctx.globalAlpha = 0.35;
+  if (r?.it && m === 'ghost') ctx.globalAlpha = 0.5 + Math.sin(t / 200) * 0.15;
   if (r?.imm > 0 && Math.floor(t / 110) % 2) ctx.globalAlpha *= 0.55;
 
   ctx.fillStyle = 'rgba(0,0,0,0.28)';
@@ -714,7 +790,7 @@ function drawPlayer(e, r, t) {
 
   if (r?.it && m !== 'infection' && m !== 'potato') {
     const pulse = 4 + Math.sin(t / 120) * 3;
-    ctx.strokeStyle = 'rgba(255,60,60,0.85)'; ctx.lineWidth = 4;
+    ctx.strokeStyle = m === 'crown' ? 'rgba(255,210,63,0.95)' : m === 'ghost' ? 'rgba(200,200,255,0.8)' : 'rgba(255,60,60,0.85)'; ctx.lineWidth = 4;
     ctx.beginPath(); ctx.arc(0, 0, R + pulse, 0, Math.PI * 2); ctx.stroke();
   }
 
@@ -752,7 +828,11 @@ function drawPlayer(e, r, t) {
     ctx.fillText('🥔', Math.sin(t / 60) * 2, top - 2);
     if (Math.floor(t / 90) % 2) { ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(10, top - 26, 3, 0, Math.PI * 2); ctx.fill(); }
     top -= 28;
-  } else if (r?.it && (m === 'classic' || m === 'blackout')) {
+  } else if (r?.it && (m === 'crown' || m === 'hide' || m === 'ghost')) {
+    ctx.font = '22px system-ui, sans-serif';
+    ctx.fillText({ crown: '👑', hide: '🔎', ghost: '👻' }[m], 0, top - 2);
+    top -= 24;
+  } else if (r?.it && CLASSIC_RULES.has(m)) {
     ctx.fillStyle = '#ff3b3b';
     ctx.beginPath(); ctx.roundRect(-14, top - 16, 28, 16, 4); ctx.fill();
     ctx.fillStyle = '#fff'; ctx.font = 'bold 12px Nunito, sans-serif'; ctx.fillText('IT', 0, top - 4);
@@ -776,6 +856,11 @@ function renderMinimap() {
   const sx = mini.width / WORLD.w, sy = mini.height / WORLD.h;
   const blackout = state?.mode === 'blackout' && state.phase === 'play' && !myRole()?.out;
   if (blackout) { mctx.fillStyle = 'rgba(0,0,0,0.6)'; mctx.fillRect(0, 0, mini.width, mini.height); }
+  const zone = currentZone();
+  if (zone) {
+    mctx.strokeStyle = '#ff3b3b'; mctx.lineWidth = 2;
+    mctx.beginPath(); mctx.arc(zone.x * sx, zone.y * sy, zone.r * sx, 0, Math.PI * 2); mctx.stroke();
+  }
   for (const e of renderables()) {
     if (!visibleToMe(e)) continue;
     const r = state?.roles?.[e.id];
@@ -832,10 +917,20 @@ function updateHud() {
       if (r.it) { txt = '🧟 INFECTED — spread it!'; cls = 'infected'; } else { txt = '🛡️ Survivor — stay away!'; cls = 'safe'; }
     } else if (m === 'potato') {
       if (r.it) { txt = '🥔 HOT POTATO! Pass it on!'; cls = 'potato'; } else { txt = 'Stay away from the potato'; cls = 'safe'; }
+    } else if (m === 'crown') {
+      if (r.it) { txt = '👑 You have the crown! Keep away!'; cls = 'potato'; } else { txt = '👑 Steal the crown!'; cls = 'safe'; }
+    } else if (m === 'hide') {
+      const seekerStun = Math.max(0, ...Object.values(state.roles).filter(x => x.it).map(x => x.stun || 0));
+      if (r.it) { txt = r.stun > 0 ? '🙈 Counting…' : '🔎 SEEKER — find them all!'; cls = 'it'; }
+      else { txt = seekerStun > 0 ? `🤫 Hide! Seeker looks in ${Math.ceil(seekerStun / 1000)}s` : '🤫 Stay hidden…'; cls = 'safe'; }
+    } else if (m === 'ghost') {
+      if (r.it) { txt = '👻 You\'re the GHOST — sneak up on them!'; cls = 'it'; } else { txt = '👻 The ghost is invisible from afar…'; cls = 'safe'; }
     } else {
       if (r.it) { txt = '🔴 YOU\'RE IT! Tag someone!'; cls = 'it'; } else { txt = m === 'blackout' ? '🔦 Hide in the dark…' : '🏃 Run! Don\'t get tagged'; cls = 'safe'; }
+      if (m === 'turbo') txt = '⚡ ' + txt;
+      if (m === 'zone' && outsideZone(currentZone(), me) && ph === 'play') { txt = '🔴 GET BACK IN THE ZONE!'; cls = 'it'; }
     }
-    if (r.stun > 0 && !r.frozen) txt += ' 💫';
+    if (r.stun > 0 && !r.frozen && m !== 'hide') txt += ' 💫';
   }
   rb.textContent = txt; rb.className = cls;
 
@@ -858,7 +953,8 @@ function updateHud() {
 function scoreText(id, r) {
   const m = state.mode;
   if (!r || !m) return '';
-  if (m === 'classic' || m === 'blackout') return r.score.toFixed(0) + 's';
+  if (CLASSIC_RULES.has(m) || m === 'crown') return r.score.toFixed(0) + 's';
+  if (m === 'hide') return r.it ? `🔎${r.tags}` : r.score.toFixed(0) + 's';
   if (m === 'freeze') return r.it ? `❄${r.tags}` : `♥${r.score}`;
   if (m === 'infection') return r.it ? `🧟${r.tags}` : r.score.toFixed(0) + 's';
   return '';
@@ -880,7 +976,7 @@ function renderScoreboard() {
     const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = info.color;
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = info.name;
     const tag = document.createElement('span');
-    tag.textContent = !r ? '' : r.out ? '💀' : r.frozen ? '🧊' : r.it ? ({ classic: '🔴', blackout: '🔴', freeze: '❄️', infection: '🧟', potato: '🥔' }[state.mode]) : '';
+    tag.textContent = !r ? '' : r.out ? '💀' : r.frozen ? '🧊' : r.it ? ({ freeze: '❄️', infection: '🧟', potato: '🥔', crown: '👑', hide: '🔎', ghost: '👻' }[state.mode] || '🔴') : '';
     const sc = document.createElement('span'); sc.className = 'muted'; sc.textContent = inRound ? scoreText(id, r) : '';
     row.append(dot, nm, tag, sc);
     sbEl.appendChild(row);
@@ -1123,4 +1219,9 @@ if (hashCode.length >= 3) {
   $('codeInput').value = hashCode;
   if (store.get('tuo-name')) joinRoom(hashCode);
 }
+// Pasting an invite link into an open tab should switch rooms
+addEventListener('hashchange', () => {
+  const code = cleanCode(location.hash.slice(1));
+  if (code.length >= 3 && code !== room) joinRoom(code);
+});
 requestAnimationFrame(frame);

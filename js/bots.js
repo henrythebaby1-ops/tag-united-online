@@ -1,5 +1,5 @@
 // Bot AI. Bots are simulated by the room host only; everyone else sees them through state updates.
-import { SPEED, SPRINT_MULT, PLAYER_R, COLORS } from './config.js';
+import { SPEED, SPRINT_MULT, PLAYER_R, COLORS, GHOST_R, modeSpeed, outsideZone } from './config.js';
 import { WORLD, resolveCollisions, pointBlocked, hasLineOfSight, randomFreePoint, groundAt } from './map.js';
 
 export const VIS = 330; // vision radius in Blackout mode
@@ -33,7 +33,13 @@ export function newBotSim(id, x, y) {
     lastSeen: null, wanderT: 0, stuckT: 0, lx: p.x, ly: p.y };
 }
 
-// ctx: { phase, mode, roles, others: [{id,x,y,vx,vy}] }
+// What bot b can see: line of sight, Blackout's small radius, and Ghost Tag's invisible IT
+function sees(b, o, ctx, r) {
+  if (ctx.mode === 'ghost' && ctx.roles[o.id]?.it && !r.it && dist(b, o) > GHOST_R) return false;
+  return canSee(b, o, ctx.mode, ctx.phase);
+}
+
+// ctx: { phase, mode, roles, round, zone, others: [{id,x,y,vx,vy}] }
 export function updateBot(b, ctx, dt) {
   const r = ctx.roles[b.id] || {};
   if (b.lastSeen) b.lastSeen.t -= dt;
@@ -64,12 +70,13 @@ export function updateBot(b, ctx, dt) {
 
   const moving = !!(mx || my);
   const sprint = b.urgent && moving && b.stam > 8;
-  if (sprint) b.stam = Math.max(0, b.stam - 32 * dt);
+  if (sprint && ctx.mode !== 'turbo') b.stam = Math.max(0, b.stam - 32 * dt);
   else b.stam = Math.min(100, b.stam + 16 * dt);
 
   const ground = groundAt(b.x, b.y);
   let sp = SPEED * 0.88 * (r.it ? 1.06 : 1) * (sprint ? SPRINT_MULT : 1) * ground.speed;
   if (ctx.phase !== 'play') sp *= 0.45;
+  else sp *= modeSpeed(ctx.mode, r) * (outsideZone(ctx.zone, b) ? 0.6 : 1);
   if (ground.slide) {
     const k = Math.min(1, dt * 1.8);
     b.vx += (mx * sp - b.vx) * k; b.vy += (my * sp - b.vy) * k;
@@ -87,17 +94,29 @@ export function updateBot(b, ctx, dt) {
 }
 
 function decide(b, ctx, r) {
-  const { phase, mode, roles, others } = ctx;
+  const { phase, mode, roles, others, zone } = ctx;
   b.urgent = false;
-  if (phase !== 'play' || r.out) { wander(b); return; }
+  if (phase !== 'play' || r.out) { wander(b, zone); return; }
 
-  if (r.it) {
+  // Shrinking Zone: get back inside before anything else
+  if (zone && Math.hypot(b.x - zone.x, b.y - zone.y) > zone.r - 40) {
+    b.goal = { x: zone.x, y: zone.y }; b.flee = null; b.urgent = true;
+    return;
+  }
+
+  // In Crown Chase everyone chases the crown holder, and the holder runs
+  const crown = mode === 'crown';
+  const chasing = crown ? !r.it : r.it;
+  const isTarget = ro => crown ? ro.it : !ro.it && !ro.out && !ro.frozen && !(ro.imm > 0);
+  const isThreat = ro => crown ? !ro.it && !ro.out : ro.it && !ro.out;
+
+  if (chasing) {
     let best = null, bd = Infinity;
     for (const o of others) {
       const ro = roles[o.id];
-      if (!ro || ro.it || ro.out || ro.frozen || ro.imm > 0) continue;
+      if (!ro || o.id === b.id || !isTarget(ro)) continue;
       const d = dist(b, o);
-      if (d < bd && canSee(b, o, mode, phase)) { bd = d; best = o; }
+      if (d < bd && sees(b, o, ctx, r)) { bd = d; best = o; }
     }
     if (best) {
       b.goal = { x: best.x + (best.vx || 0) * 0.35, y: best.y + (best.vy || 0) * 0.35 };
@@ -111,7 +130,7 @@ function decide(b, ctx, r) {
       if (dist(b, b.goal) < 30) b.lastSeen = null;
       return;
     }
-    wander(b);
+    wander(b, zone);
     return;
   }
 
@@ -119,17 +138,27 @@ function decide(b, ctx, r) {
   let threat = null, td = Infinity;
   for (const o of others) {
     const ro = roles[o.id];
-    if (!ro || !ro.it || ro.out) continue;
+    if (!ro || o.id === b.id || !isThreat(ro)) continue;
     const d = dist(b, o);
-    if (d < td && d < 520 && canSee(b, o, mode, phase)) { td = d; threat = o; }
+    if (d < td && d < 520 && sees(b, o, ctx, r)) { td = d; threat = o; }
   }
   if (threat) {
-    b.flee = chooseFlee(b, threat);
+    b.flee = chooseFlee(b, threat, zone);
     b.goal = null;
     b.urgent = td < 320;
+    b.hideRound = null; // spotted: find a new hiding place afterwards
     return;
   }
   b.flee = null;
+  if (mode === 'hide') {
+    if (b.hideRound !== ctx.round) {
+      b.hideRound = ctx.round;
+      b.hideSpot = pickHideSpot(b, others.filter(o => roles[o.id]?.it));
+    }
+    b.goal = dist(b, b.hideSpot) > 15 ? b.hideSpot : null; // get there, then keep still
+    b.urgent = !!b.goal;
+    return;
+  }
   if (mode === 'freeze') {
     let best = null, bd = Infinity;
     for (const o of others) {
@@ -140,10 +169,25 @@ function decide(b, ctx, r) {
     }
     if (best) { b.goal = { x: best.x, y: best.y }; b.urgent = bd < 400; return; }
   }
-  wander(b);
+  wander(b, zone);
 }
 
-function chooseFlee(b, t) {
+// Hide & Seek: somewhere out of the seekers' sight, not too far to reach
+function pickHideSpot(b, seekers) {
+  let best = null, bs = -Infinity;
+  for (let i = 0; i < 30; i++) {
+    const p = randomFreePoint();
+    let s = -dist(b, p) * 0.4 + Math.random() * 80;
+    for (const k of seekers) {
+      s += Math.min(dist(p, k), 900) * 0.5;
+      if (!hasLineOfSight(p.x, p.y, k.x, k.y)) s += 500;
+    }
+    if (s > bs) { bs = s; best = p; }
+  }
+  return best;
+}
+
+function chooseFlee(b, t, zone) {
   let best = null, bs = -Infinity;
   const d0 = dist(b, t);
   for (const dir of DIRS) {
@@ -153,6 +197,7 @@ function chooseFlee(b, t) {
     if (!hasLineOfSight(px, py, t.x, t.y)) s += 70; // prefer breaking line of sight (hide!)
     const edge = Math.min(px, py, WORLD.w - px, WORLD.h - py);
     if (edge < 180) s -= (180 - edge) * 0.6; // don't get cornered
+    if (zone && Math.hypot(px - zone.x, py - zone.y) > zone.r - 40) s -= 300; // stay in the zone
     if (b.flee) s += (dir.x * b.flee.x + dir.y * b.flee.y) * 15; // momentum
     s += Math.random() * 6;
     if (s > bs) { bs = s; best = dir; }
@@ -160,10 +205,11 @@ function chooseFlee(b, t) {
   return best || DIRS[Math.floor(Math.random() * DIRS.length)];
 }
 
-function wander(b) {
+function wander(b, zone) {
   b.flee = null;
   if (!b.goal || b.wanderT <= 0 || dist(b, b.goal) < 40) {
     b.goal = randomFreePoint();
+    for (let i = 0; i < 20 && zone && outsideZone({ ...zone, r: zone.r - 60 }, b.goal); i++) b.goal = randomFreePoint();
     b.wanderT = 5 + Math.random() * 4;
   }
 }
