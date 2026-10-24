@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Tag United Online</title>
+  <meta name="description" content="Online multiplayer tag on two basketball courts, a playground and a big wall to hide behind. Vote for a game mode every round.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- Main menu -->
+  <section id="menu" class="screen">
+    <div class="menu-card">
+      <h1 class="logo">Tag United <span>Online</span></h1>
+      <p class="tagline">2 courts · 1 playground · 1 wall to hide behind · vote every round</p>
+
+      <label class="field">
+        <span>Your name</span>
+        <input id="nameInput" maxlength="14" placeholder="Player" autocomplete="off">
+      </label>
+      <div class="field">
+        <span>Color</span>
+        <div id="colorPicker" class="colors"></div>
+      </div>
+
+      <div class="menu-actions">
+        <button id="quickBtn" class="btn primary big">⚡ Quick Play</button>
+        <button id="createBtn" class="btn">➕ Create Room</button>
+      </div>
+      <div class="join-row">
+        <input id="codeInput" maxlength="6" placeholder="ROOM CODE" autocomplete="off">
+        <button id="joinBtn" class="btn">Join</button>
+      </div>
+
+      <div class="rooms">
+        <h3>Open rooms</h3>
+        <ul id="roomList"><li class="muted">Looking for rooms…</li></ul>
+      </div>
+      <p class="help">Move: <b>WASD</b> / arrows · Sprint: <b>Shift</b> · Touch: drag left side, tap ⚡</p>
+    </div>
+  </section>
+
+  <!-- In-game HUD -->
+  <div id="hud" class="hidden">
+    <div id="topbar">
+      <div id="modeLabel">Waiting</div>
+      <div id="timer"></div>
+    </div>
+    <div id="roleBanner"></div>
+    <div id="scoreboard"></div>
+    <div id="toasts"></div>
+    <div id="stamina"><div id="staminaFill"></div></div>
+    <div id="roomTag"></div>
+    <button id="leaveBtn" class="btn small ghost">Leave</button>
+    <canvas id="minimap" width="200" height="134"></canvas>
+  </div>
+
+  <!-- Lobby / waiting overlay -->
+  <section id="lobby" class="overlay hidden">
+    <div class="panel">
+      <h2>Room <span id="lobbyCode" class="code"></span></h2>
+      <p class="muted">Share the code or link so friends can join.</p>
+      <button id="copyLinkBtn" class="btn small">📋 Copy invite link</button>
+      <h3>Players</h3>
+      <ul id="lobbyPlayers" class="player-list"></ul>
+      <div id="settings">
+        <h3>Settings <span id="hostOnly" class="muted small"></span></h3>
+        <label class="toggle"><input type="checkbox" id="botsToggle"> <span>Allow bots</span></label>
+        <label class="field inline"><span>Bots</span><input type="range" id="botCount" min="1" max="7" value="3"><b id="botCountLabel">3</b></label>
+        <label class="field inline"><span>Round</span>
+          <select id="roundTime">
+            <option value="60">60 s</option><option value="90">90 s</option>
+            <option value="120" selected>120 s</option><option value="180">180 s</option>
+          </select>
+        </label>
+      </div>
+      <button id="startBtn" class="btn primary big">Start Game</button>
+      <p id="startHint" class="muted small"></p>
+    </div>
+  </section>
+
+  <!-- Vote overlay -->
+  <section id="vote" class="overlay hidden">
+    <div class="panel wide">
+      <h2>Vote for the next game mode</h2>
+      <p class="muted"><span id="voteTimer"></span></p>
+      <div id="voteCards" class="cards"></div>
+    </div>
+  </section>
+
+  <!-- Countdown -->
+  <div id="countdown" class="hidden"></div>
+
+  <!-- Results overlay -->
+  <section id="results" class="overlay hidden">
+    <div class="panel">
+      <h2 id="resultsTitle">Round over</h2>
+      <p id="resultsText"></p>
+      <ol id="resultsList"></ol>
+      <p class="muted small" id="resultsNext"></p>
+      <button id="toLobbyBtn" class="btn small ghost">Back to room settings</button>
+    </div>
+  </section>
+
+  <!-- Touch controls -->
+  <div id="touch" class="hidden">
+    <div id="stick"><div id="knob"></div></div>
+    <button id="sprintBtn">⚡</button>
+  </div>
+
+  <div id="status" class="hidden"></div>
+
+  <script type="module" src="js/game.js"></script>
+</body>
+</html>
