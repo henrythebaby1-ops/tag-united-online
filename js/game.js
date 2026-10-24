@@ -219,7 +219,7 @@ function onState(p) {
   }
   state = p;
   phaseEnd = now() + (p.t || 0);
-  if (p.map) applyMap(p.map);
+  applyMap(p.map || 'schoolyard'); // hosts on the old version have no map field
   const ids = new Set();
   for (const b of p.bots || []) {
     ids.add(b.id);
